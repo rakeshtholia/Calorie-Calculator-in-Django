@@ -1,0 +1,348 @@
+pip install django
+pip install django-filters
+
+django-admin startproject CalorieClac
+cd  CalorieClac
+django-admin startapp Fityfeed
+
+#writing models
+
+from django.db import models
+from django.contrib.auth.models import User
+
+# Create your models here.
+class Customer(models.Model):
+    user = models.OneToOneField(User, null=True, on_delete=models.CASCADE)
+    name=models.CharField(max_length=200,null=True)
+    email=models.CharField(max_length=200,null=True)
+    date_created=models.DateTimeField(auto_now_add=True,null=True)
+    
+    def __str__(self):
+        return str(self.name)
+
+class Category(models.Model):
+    options=(
+        ('breakfast','breakfast'),
+        ('lunch','lunch'),
+        ('dinner','dinner'),
+        ('snacks','snacks'),
+    )
+    name=models.CharField(max_length=50,choices=options)
+    def __str__(self):
+        return self.name
+
+class Fooditem(models.Model):
+    name = models.CharField(max_length=200)
+    category = models.ManyToManyField(Category)
+    carbohydrate = models.DecimalField(max_digits=5,decimal_places=2,default=0)
+    fats = models.DecimalField(max_digits=5,decimal_places=2,default=0)
+    protein = models.DecimalField(max_digits=5,decimal_places=2,default=0)
+    calorie=models.DecimalField(max_digits=5,decimal_places=2,default=0,blank=True)
+    quantity = models.IntegerField(default=1,null=True,blank=True)
+    
+    def __str__(self):
+        return str(self.name)
+
+#for user page-------------------------------------------------------------
+class UserFooditem(models.Model):
+    customer = models.ManyToManyField(Customer ,blank=True)
+    fooditem=models.ManyToManyField(Fooditem)
+    
+  #authentication
+  from django.http import HttpResponse
+from django.shortcuts import redirect
+
+def unauthorized_user(view_func): 
+    def wrapper_func(request,*args,**kwargs):
+        if request.user.is_authenticated:
+            return redirect('home')
+        else:
+            return view_func(request,*args,**kwargs)
+    return wrapper_func
+
+def allowed_users(allowed_roles=[]):
+    def decorator(view_func): 
+        def wrapper_func(request,*args,**kwargs):
+            group=None
+            if request.user.groups.exists():
+                group=request.user.groups.all()[0].name
+            if group in allowed_roles:
+                return view_func(request,*args,**kwargs)
+            else:
+                return HttpResponse("<h1>You are not allowed to access this page</h1>")
+        return wrapper_func
+    return decorator
+
+def admin_only(view_func):
+    def wrapper_func(request,*args,**kwargs):
+        group=None
+        if request.user.groups.exists():
+            group=request.user.groups.all()[0].name
+        if group=='user':
+            return redirect('userPage')
+        if group=='admin':
+            return view_func(request,*args,**kwargs)
+    return wrapper_func
+
+
+#search feature
+import django_filters
+from .models import *
+
+class fooditemFilter(django_filters.FilterSet):
+    class Meta:
+        model = Fooditem
+        fields = ['name']
+        
+#creating and updating models
+from django.forms import ModelForm
+from .models import *
+from django.contrib.auth.forms import UserCreationForm
+
+class fooditemForm(ModelForm):
+    class Meta:
+        model=Fooditem
+        fields="__all__"
+
+class addUserFooditem(ModelForm):
+    class Meta:
+        model=UserFooditem
+        fields="__all__"
+        
+class createUserForm(UserCreationForm):
+    class Meta:
+        model=User
+        fields=['username','email','password1','password2']
+        
+        
+        
+#creating and updating models from django admin site
+from django.contrib import admin
+from .models import *
+
+# Now, Register the models here.
+
+class foodAdmin(admin.ModelAdmin):
+    class Meta:
+        model=Fooditem
+    list_display=['name']
+    list_filter=['name']
+
+admin.site.register(Customer)
+admin.site.register(UserFooditem)
+admin.site.register(Category)
+admin.site.register(Fooditem,foodAdmin)
+
+py manage.py makemigrations
+py manage.py migrate
+py manage.py createsuperuser
+
+
+from django.contrib import admin
+from django.urls import path, include
+
+urlpatterns = [
+    path('admin/', admin.site.urls),
+    path('',include('Fityfeed.urls')),
+]
+
+
+from django.urls import path,include
+from . import views
+from django.contrib.auth import views as auth_views
+
+urlpatterns = [
+    path('',views.home,name='home'),
+    path('user/',views.userPage,name='userPage'), #userPage
+    path('product/',views.fooditem,name='fooditem'),
+    path('createfooditem/',views.createfooditem,name='createfooditem'),
+    path('register/',views.registerPage,name='register'),
+    path('login/',views.loginPage,name='login'),
+    path('logout/',views.logoutUser,name='logout'),
+    path('addFooditem/',views.addFooditem,name='addFooditem'),
+     path('reset_password/',
+         auth_views.PasswordResetView.as_view(),
+         name="reset_password"),
+
+    path('reset_password_sent/',
+         auth_views.PasswordResetDoneView.as_view(),
+         name="password_reset_done"),
+
+    path('reset/<uidb64>/<token>/',
+         auth_views.PasswordResetConfirmView.as_view(),
+         name="password_reset_confirm"),
+
+    path('reset_password_complete/',
+         auth_views.PasswordResetCompleteView.as_view(),
+         name="password_reset_complete"),
+]
+
+
+from django.shortcuts import render,redirect
+from django.http import HttpResponse
+from django.contrib.auth.models import User
+from .models import *
+from .forms import *
+from django.contrib import messages
+from django.contrib.auth import authenticate,login,logout
+from django.contrib.auth.decorators import login_required
+from .decorators import *
+from django.contrib.auth.models import Group
+from .filters import fooditemFilter
+# Create your views here.
+
+@login_required(login_url='login')
+@admin_only
+def home(request):
+    breakfast=Category.objects.filter(name='breakfast')[0].fooditem_set.all()[:5]
+    lunch=Category.objects.filter(name='lunch')[0].fooditem_set.all()[:5]
+    dinner=Category.objects.filter(name='dinner')[0].fooditem_set.all()[:5]
+    snacks=Category.objects.filter(name='snacks')[0].fooditem_set.all()[:5]
+    customers=Customer.objects.all()
+    context={'breakfast':breakfast,
+              'lunch':lunch,
+              'dinner':dinner,
+              'snacks':snacks,
+              'customers':customers,
+            }
+    return render(request,'main.html',context)
+
+@login_required(login_url='login')
+@allowed_users(allowed_roles=['admin'])
+def fooditem(request):
+    breakfast=Category.objects.filter(name='breakfast')[0].fooditem_set.all()
+    bcnt=breakfast.count()
+    lunch=Category.objects.filter(name='lunch')[0].fooditem_set.all()
+    lcnt=lunch.count()
+    dinner=Category.objects.filter(name='dinner')[0].fooditem_set.all()
+    dcnt=dinner.count()
+    snacks=Category.objects.filter(name='snacks')[0].fooditem_set.all()
+    scnt=snacks.count()
+    context={'breakfast':breakfast,
+              'bcnt':bcnt,
+              'lcnt':lcnt,
+              'scnt':scnt,
+              'dcnt':dcnt,
+              'lunch':lunch,
+              'dinner':dinner,
+              'snacks':snacks,
+            }
+    return render(request,'fooditem.html',context)
+
+@login_required(login_url='login')
+@allowed_users(allowed_roles=['admin'])
+def createfooditem(request):
+    form = fooditemForm()
+    if request.method == 'POST':
+        form = fooditemForm(request.POST)
+        if form.is_valid():
+            form.save()
+            return redirect('/')
+    context={'form':form}
+    return render(request,'createfooditem.html',context)
+
+@unauthorized_user
+def registerPage(request):
+    form=createUserForm()
+    if request.method=='POST':
+        form=createUserForm(request.POST)
+        if form.is_valid():
+            user=form.save()
+            username=form.cleaned_data.get('username')
+            group=Group.objects.get(name='user')
+            user.groups.add(group)
+            email=form.cleaned_data.get('email')
+            Customer.objects.create(user=user, name=username,email=email)
+            messages.success(request,'Account created for '+username)
+            return redirect('login')
+    context={'form':form}
+    return render(request,'register.html',context)
+
+@unauthorized_user
+def loginPage(request):
+    if request.method=='POST':
+        username=request.POST.get('username')
+        password=request.POST.get('password')
+        user=authenticate(request,username=username,password=password)
+        if user is not None:
+            login(request,user)
+            return redirect('home')
+        else:
+            messages.info(request,'username or password is invalid')
+    return render(request,'login.html')
+
+
+@login_required(login_url='login')
+def logoutUser(request):
+    logout(request)
+    return redirect('login')
+
+def userPage(request):
+    user=request.user
+    cust=user.customer
+    fooditems=Fooditem.objects.filter()
+    myfilter = fooditemFilter(request.GET,queryset=fooditems)
+    fooditems=myfilter.qs
+    total=UserFooditem.objects.all()
+    myfooditems=total.filter(customer=cust)
+    cnt=myfooditems.count()
+    querysetFood=[]
+    for food in myfooditems:
+        querysetFood.append(food.fooditem.all())
+    finalFoodItems=[]
+    for items in querysetFood:
+        for food_items in items:
+            finalFoodItems.append(food_items)
+    totalCalories=0
+    for foods in finalFoodItems:
+        totalCalories+=foods.calorie
+    CalorieLeft=2000-totalCalories
+    context={'CalorieLeft':CalorieLeft,'totalCalories':totalCalories,'cnt':cnt,'foodlist':finalFoodItems,'fooditem':fooditems,'myfilter':myfilter}
+    return render(request,'user.html',context)
+
+
+def addFooditem(request):
+    user=request.user
+    cust=user.customer
+    if request.method=="POST":
+        form =addUserFooditem(request.POST)
+        if form.is_valid():
+            form.save()
+            return redirect('/')
+    form=addUserFooditem()
+    context={'form':form}
+    return render(request,'addUserFooditem.html',context)
+    
+    
+    
+    #styling
+    STATIC_URL = '/static/'
+STATICFILES_DIRS = [
+    os.path.join(BASE_DIR,'static'),
+]
+
+
+.flex-box-row {
+    display:flex;
+    padding : 10px;
+    flex-wrap: wrap;
+    justify-content: space-around;
+}
+
+#heading{
+    text-shadow: antiquewhite;
+    font-family: 'Courier New', Courier, monospace;
+    font-weight: 550;
+    font-size: xx-large;
+    text-align: left;
+}
+
+#Forget Password functionality
+EMAIL_BACKEND='django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST='smtp.gmail.com'
+EMAIL_PORT=587
+EMAIL_USE_TLS=True
+EMAIL_HOST_USER='***'
+EMAIL_HOST_PASSWORD='***'
+
+
